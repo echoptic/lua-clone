@@ -1,0 +1,164 @@
+use crate::*;
+
+grammar;
+
+List<T>: Vec<T> = {
+    <e:T> <mut v:("," <T>)*> => {
+        v.insert(0, e);
+        v
+    }
+};
+
+Name: String = r"[_a-zA-Z]+[_a-zA-Z0-9]*" => <>.to_string();
+
+Numeral: NumeralExpr = {
+    r"[0-9]+" => NumeralExpr::Int(<>.parse().unwrap_or(-1)),
+    r"0[xX][0-9a-fA-F]+" => NumeralExpr::Int(i64::from_str_radix(&<>[2..], 16).unwrap_or(-1)),
+};
+
+pub Block: Vec<Stat> = <mut v:Stat*> <retstat:Retstat?> => match retstat {
+    None => v,
+    Some(s) => {
+        v.push(s);
+        v
+    },
+};
+
+Stat: Stat = {
+    ";" => Stat::Semicolon,
+    <variables:Varlist> "=" <init:Explist> => Stat::Assignment {<>},
+    <FunctionCall> => Stat::FunctionCall(<>),
+    "::" <Name> "::" => Stat::Label(<>),
+    "break" => Stat::Break,
+    "goto" <Name> => Stat::Goto(<>),
+    "do" <Block> "end" => Stat::Block(<>),
+    "while" <cond:Exp> "do" <block:Block> "end" => Stat::While {<>},
+    "repeat" <block:Block> "until" <cond:Exp> "end" => Stat::Repeat {<>},
+    "if" <if_clause:IfClause> <elseif_clauses:("elseif" <IfClause>)*>
+        <else_clause:("else" <Block>)?> "end" => Stat::If {
+            if_clause,
+            elseif_clauses,
+            else_clause: else_clause.unwrap_or_default(),
+        },
+    "for" <variable:Name> "=" <start:Exp> "," <end:Exp> <step:("," <Exp>)?> "do" <block:Block> "end" 
+        => Stat::NumericalFor {<>},
+    "for" <namelist:Namelist> "in" <explist:Explist> "do" <block:Block> "end" => Stat::GenericFor {<>},
+    "local" "function" <name:Name> <body:Funcbody> => Stat::LocalFunction {<>},
+    "local" <variables:List<AttName>> <init:("=" <Explist>)?> => Stat::LocalDeclarations {
+        variables,
+        init: init.unwrap_or_default(),
+    },
+};
+
+IfClause: IfClause = <cond:Exp> "then" <block:Block> => IfClause{<>};
+
+AttName: AttName = <name:Name> <attrib:Attrib?> => AttName {<>};
+
+Attrib: String = "<" <Name> ">" => <>;
+
+Retstat: Stat = "return" <Explist?> (";")? => Stat::Return(<>.unwrap_or_default());
+
+Varlist = List<Var>;
+
+Var: Exp = {
+    <Name> => Exp::Name(<>),
+    <base:PrefixExp> "[" <index:Exp> "]" => Exp::Index { base: Box::new(base), index: Box::new(index) },
+    <base:PrefixExp> "." <index:Exp> => Exp::Index { base: Box::new(base), index: Box::new(index) },
+};
+
+Namelist = List<Name>;
+
+Explist = List<Exp>;
+
+Exp: Exp = {
+    #[precedence(level = "0")]
+    "nil" => Exp::Nil,
+    #[precedence(level = "0")]
+    "false" => Exp::Boolean(false),
+    #[precedence(level = "0")]
+    "true" => Exp::Boolean(true),
+    #[precedence(level = "0")]
+    Numeral => Exp::Numeral(<>),
+    #[precedence(level = "0")]
+    "..." => Exp::VarArg,
+    #[precedence(level = "0")]
+    "function" <Funcbody> => Exp::FunctionDef(<>),
+    #[precedence(level = "0")]
+    PrefixExp,
+    #[precedence(level = "12")] #[assoc(side = "left")]
+    <lhs:Exp> "or" <rhs:Exp> => Exp::Binary { lhs: Box::new(lhs), rhs: Box::new(rhs), op: BinOp::Or },
+    #[precedence(level = "11")] #[assoc(side = "left")]
+    <lhs:Exp> "and" <rhs:Exp> => Exp::Binary { lhs: Box::new(lhs), rhs: Box::new(rhs), op: BinOp::Or },
+    #[precedence(level = "11")] #[assoc(side = "left")]
+    <lhs:Exp> "<" <rhs:Exp> => Exp::Binary { lhs: Box::new(lhs), rhs: Box::new(rhs), op: BinOp::Lt },
+    #[precedence(level = "11")] #[assoc(side = "left")]
+    <lhs:Exp> ">" <rhs:Exp> => Exp::Binary { lhs: Box::new(lhs), rhs: Box::new(rhs), op: BinOp::Gt },
+    #[precedence(level = "11")] #[assoc(side = "left")]
+    <lhs:Exp> "<=" <rhs:Exp> => Exp::Binary { lhs: Box::new(lhs), rhs: Box::new(rhs), op: BinOp::LtOrEq },
+    #[precedence(level = "11")] #[assoc(side = "left")]
+    <lhs:Exp> ">=" <rhs:Exp> => Exp::Binary { lhs: Box::new(lhs), rhs: Box::new(rhs), op: BinOp::GtOrEq },
+    #[precedence(level = "11")] #[assoc(side = "left")]
+    <lhs:Exp> "~=" <rhs:Exp> => Exp::Binary { lhs: Box::new(lhs), rhs: Box::new(rhs), op: BinOp::NotEq },
+    #[precedence(level = "11")] #[assoc(side = "left")]
+    <lhs:Exp> "==" <rhs:Exp> => Exp::Binary { lhs: Box::new(lhs), rhs: Box::new(rhs), op: BinOp::Eq },
+    #[precedence(level = "10")] #[assoc(side = "left")]
+    <lhs:Exp> "|" <rhs:Exp> => Exp::Binary { lhs: Box::new(lhs), rhs: Box::new(rhs), op: BinOp::BitOr },
+    #[precedence(level = "9")] #[assoc(side = "left")]
+    <lhs:Exp> "~" <rhs:Exp> => Exp::Binary { lhs: Box::new(lhs), rhs: Box::new(rhs), op: BinOp::BitNot },
+    #[precedence(level = "8")] #[assoc(side = "left")]
+    <lhs:Exp> "&" <rhs:Exp> => Exp::Binary { lhs: Box::new(lhs), rhs: Box::new(rhs), op: BinOp::BitAnd },
+    #[precedence(level = "7")] #[assoc(side = "left")]
+    <lhs:Exp> "<<" <rhs:Exp> => Exp::Binary { lhs: Box::new(lhs), rhs: Box::new(rhs), op: BinOp::Shl },
+    #[precedence(level = "6")] #[assoc(side = "left")]
+    <lhs:Exp> ">>" <rhs:Exp> => Exp::Binary { lhs: Box::new(lhs), rhs: Box::new(rhs), op: BinOp::Shr },
+    #[precedence(level = "5")] #[assoc(side = "right")]
+    <lhs:Exp> ".." <rhs:Exp> => Exp::Binary { lhs: Box::new(lhs), rhs: Box::new(rhs), op: BinOp::Concat },
+    #[precedence(level = "4")] #[assoc(side = "left")]
+    <lhs:Exp> "+" <rhs:Exp> => Exp::Binary { lhs: Box::new(lhs), rhs: Box::new(rhs), op: BinOp::Add },
+    #[precedence(level = "4")] #[assoc(side = "left")]
+    <lhs:Exp> "-" <rhs:Exp> => Exp::Binary { lhs: Box::new(lhs), rhs: Box::new(rhs), op: BinOp::Sub },
+    #[precedence(level = "3")] #[assoc(side = "left")]
+    <lhs:Exp> "*" <rhs:Exp> => Exp::Binary { lhs: Box::new(lhs), rhs: Box::new(rhs), op: BinOp::Mul },
+    #[precedence(level = "3")] #[assoc(side = "left")]
+    <lhs:Exp> "/" <rhs:Exp> => Exp::Binary { lhs: Box::new(lhs), rhs: Box::new(rhs), op: BinOp::Div },
+    #[precedence(level = "3")] #[assoc(side = "left")]
+    <lhs:Exp> "//" <rhs:Exp> => Exp::Binary { lhs: Box::new(lhs), rhs: Box::new(rhs), op: BinOp::FloorDiv },
+    #[precedence(level = "3")] #[assoc(side = "left")]
+    <lhs:Exp> "%" <rhs:Exp> => Exp::Binary { lhs: Box::new(lhs), rhs: Box::new(rhs), op: BinOp::Mod },
+    #[precedence(level = "2")] #[assoc(side = "left")]
+    <op:UnOp> <exp:Exp> => Exp::Unary { op, exp: Box::new(exp) },
+    #[precedence(level = "1")] #[assoc(side = "right")]
+    <lhs:Exp> "^" <rhs:Exp> => Exp::Binary { lhs: Box::new(lhs), rhs: Box::new(rhs), op: BinOp::Exp },
+};
+
+PrefixExp: Exp = { 
+    // Var,
+    <Name> => Exp::Name(<>),
+    <FunctionCall> => Exp::FunctionCall(Box::new(<>)),
+};
+
+FunctionCall: FunctionCall = {
+    <base:PrefixExp> <args:Args> => FunctionCall {<>},
+};
+
+Args: Vec<Exp> = {
+    "(" <Explist?> ")" => <>.unwrap_or_default(),
+};
+
+Funcbody: Funcbody = "(" <params:Parlist> ")" <block:Block> "end" => Funcbody {<>};
+
+Parlist: Vec<String> = {
+    "..." => vec!["...".to_string()],
+    <Namelist> => <>,
+    // <mut v:Namelist> "," "..." => {
+    //     v.push("...".to_string());
+    //     v
+    // },
+};
+
+UnOp: UnOp = {
+    "-" => UnOp::Negative,
+    "not" => UnOp::LogicalNot,
+    "#" => UnOp::Length,
+    "~" => UnOp::BitNot,
+};
